@@ -1,0 +1,116 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Primitive Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Entity Validation Helpers
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email'])
+        && data.uid == request.auth.uid
+        && data.email is string && data.email.size() <= 256
+        && (data.get('displayName', '') is string && data.get('displayName', '').size() <= 128)
+        && (data.get('customGeminiApiKey', '') is string && data.get('customGeminiApiKey', '').size() <= 512);
+    }
+
+    function isValidChatCreate(data) {
+      return data.keys().hasAll(['userId', 'title', 'createdAt', 'updatedAt'])
+        && data.userId == request.auth.uid
+        && data.title is string && data.title.size() <= 200
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidChatUpdate(data) {
+      return data.keys().hasAll(['userId', 'title', 'createdAt', 'updatedAt'])
+        && data.userId == request.auth.uid
+        && data.title is string && data.title.size() <= 200
+        && data.createdAt == existing().createdAt
+        && data.updatedAt == request.time;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['chatId', 'userId', 'role', 'content', 'createdAt'])
+        && data.chatId is string && isValidId(data.chatId)
+        && data.userId == request.auth.uid
+        && data.role in ['user', 'model']
+        && data.content is string && data.content.size() <= 50000
+        && data.createdAt == request.time
+        && (data.get('attachments', []) is list && data.get('attachments', []).size() <= 5);
+    }
+
+    function isValidMessageUpdate(data) {
+      return data.keys().hasAll(['chatId', 'userId', 'role', 'content', 'createdAt'])
+        && data.chatId == existing().chatId
+        && data.userId == existing().userId
+        && data.role == existing().role
+        && data.content is string && data.content.size() <= 60000
+        && data.createdAt == existing().createdAt;
+    }
+
+    // 3. Match Blocks
+    
+    // Users
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'customGeminiApiKey', 'updatedAt']);
+    }
+
+    // Chats
+    match /chats/{chatId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isVerified() && isValidChatCreate(incoming()) && isValidId(chatId);
+      allow update: if isVerified() && existing().userId == request.auth.uid 
+        && isValidChatUpdate(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']);
+      allow delete: if isVerified() && existing().userId == request.auth.uid;
+
+      // Messages (Subcollection)
+      match /messages/{messageId} {
+        // Master Gate: Verify parent chat existence and ownership
+        function getChatOwner() {
+          return get(/databases/$(database)/documents/chats/$(chatId)).data.userId;
+        }
+
+        allow get: if isSignedIn() && getChatOwner() == request.auth.uid;
+        allow list: if isSignedIn() && getChatOwner() == request.auth.uid;
+        allow create: if isVerified() && getChatOwner() == request.auth.uid 
+          && isValidMessage(incoming()) && isValidId(messageId);
+        allow update: if isVerified() && getChatOwner() == request.auth.uid 
+          && isValidMessageUpdate(incoming())
+          && incoming().diff(existing()).affectedKeys().hasOnly(['content']); 
+        allow delete: if isVerified() && getChatOwner() == request.auth.uid;
+      }
+    }
+  }
+}
