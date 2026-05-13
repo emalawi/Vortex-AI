@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
+  signInAnonymously,
   signOut, 
   User 
 } from 'firebase/auth';
@@ -90,26 +89,32 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      if (u) {
-        // Fetch or create profile
-        const userDocRef = doc(db, 'users', u.uid);
-        const userDoc = await getDoc(userDocRef);
-        
-        if (userDoc.exists()) {
-          setProfile(userDoc.data() as UserProfile);
-        } else {
-          const newProfile: UserProfile = {
-            uid: u.uid,
-            email: u.email || '',
-            displayName: u.displayName || '',
-            createdAt: new Date().toISOString()
-          };
-          await setDoc(userDocRef, newProfile);
-          setProfile(newProfile);
+      if (!u) {
+        try {
+          await signInAnonymously(auth);
+        } catch (e) {
+          console.error("Anonymous sign in failed", e);
         }
+        return;
+      }
+      
+      setUser(u);
+      
+      // Fetch or create profile
+      const userDocRef = doc(db, 'users', u.uid);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (userDoc.exists()) {
+        setProfile(userDoc.data() as UserProfile);
       } else {
-        setProfile(null);
+        const newProfile: UserProfile = {
+          uid: u.uid,
+          email: u.email || 'anonymous',
+          displayName: u.displayName || 'Vortex User',
+          createdAt: new Date().toISOString()
+        };
+        await setDoc(userDocRef, newProfile);
+        setProfile(newProfile);
       }
       setLoading(false);
     });
@@ -150,15 +155,6 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  const handleLogin = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login failed", error);
-    }
-  };
 
   const handleLogout = () => signOut(auth);
 
@@ -305,40 +301,10 @@ export default function App() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  if (loading) {
+  if (loading || !user) {
     return (
       <div className="flex items-center justify-center h-screen bg-black">
         <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-black text-white relative overflow-hidden">
-        <VortexBackground />
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="z-10 text-center"
-        >
-          <div className="w-24 h-24 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-indigo-500/20">
-            <Cpu className="w-12 h-12" />
-          </div>
-          <h1 className="text-6xl font-black mb-4 tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-white to-zinc-500">
-            VORTEX AI
-          </h1>
-          <p className="text-zinc-400 text-lg mb-8 max-w-md mx-auto">
-            The next generation of conversational intelligence. Process files, generate code, and explore ideas.
-          </p>
-          <button 
-            onClick={handleLogin}
-            className="px-8 py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all flex items-center gap-3 mx-auto shadow-xl"
-            id="login-button"
-          >
-            Get Started with Google
-          </button>
-        </motion.div>
       </div>
     );
   }
@@ -387,32 +353,22 @@ export default function App() {
 
         <div className="p-4 border-t border-zinc-800 bg-zinc-900/80">
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center border border-zinc-700">
-              <UserIcon className="w-5 h-5 text-zinc-500" />
+            <div className="w-10 h-10 rounded-full bg-indigo-600/20 flex items-center justify-center border border-indigo-500/30">
+              <Cpu className="w-5 h-5 text-indigo-500" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold truncate">{user.displayName || user.email}</p>
-              <p className="text-xs text-zinc-500 truncate">{user.email}</p>
+              <p className="text-sm font-bold truncate">Vortex Node</p>
+              <p className="text-[10px] text-zinc-500 truncate font-mono uppercase">ID: {user.uid.slice(0, 8)}</p>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              onClick={() => setIsApiKeyModalOpen(true)}
-              className="flex items-center justify-center gap-2 p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold h-9"
-              id="api-key-settings"
-            >
-              <Key className="w-3 h-3" />
-              API Key
-            </button>
-            <button 
-              onClick={handleLogout}
-              className="flex items-center justify-center gap-2 p-2 rounded-lg bg-zinc-800 hover:bg-red-900/30 text-red-500 text-xs font-semibold h-9 transition-colors"
-              id="logout-button"
-            >
-              <LogOut className="w-3 h-3" />
-              Logout
-            </button>
-          </div>
+          <button 
+            onClick={() => setIsApiKeyModalOpen(true)}
+            className="w-full flex items-center justify-center gap-2 p-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold transition-all border border-zinc-700 hover:border-indigo-500/50"
+            id="api-key-settings"
+          >
+            <Key className="w-4 h-4 text-indigo-500" />
+            Activation Key Settings
+          </button>
         </div>
       </motion.aside>
 
